@@ -1,0 +1,9 @@
+{
+  "title": "The Metamorphosis",
+  "file": "metamorphosis.txt",
+  "startMarker": "*** START OF THE PROJECT GUTENBERG EBOOK",
+  "endMarker": "*** END OF THE PROJECT GUTENBERG EBOOK",
+  "sectionPattern": "^(I|II|III)$",
+  "chunking": "paragraph",
+  "minLength": 40
+}

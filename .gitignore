@@ -1,5 +1,10 @@
 # IDE
 .idea/
+.claude/
+.junie/
+
+# Personal notes
+TODO.md
 .vscode/
 *.iml
 

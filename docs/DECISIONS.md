@@ -91,3 +91,27 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 **Why:** the specs and their design notes record why things were built; the others are personal tooling.
 
 **Note:** specs and the README describe some of the same things. The README is the overview; the specs are the contract for each part.
+
+## 13. The publisher waits for Kafka's acknowledgement and retries the same quote
+
+**Decision:** `QuotePublisher` sends a quote and waits for Kafka to acknowledge it (10 s timeout; the producer's `max.block.ms` is also set to 10 s). `PublishBook` moves to the next quote only after that, so a failed publish is retried on the next turn instead of skipping the quote.
+
+**Why:** one quote every 3 seconds makes waiting free, and it gives "no quote is skipped" with a single rule. Without `max.block.ms`, Kafka's default would hold the thread for 60 s before the 10 s timeout even starts when the broker is unreachable (seen when the address was wrong).
+
+**Rejected:** fire-and-forget with a callback, where a failed send would be lost or need its own retry queue.
+
+## 14. A scheduler drives the publisher; the logic is a separate class
+
+**Decision:** `PublishBookJob` (`adapter.in.scheduler`, `@Scheduled` with `fixedDelay` from `PRODUCER_DELAY_MS`) only calls `PublishBook.publishNext()` (`application`). `APP_PUBLISHER_ENABLED=false` removes both beans, so the book is not even read.
+
+**Why:** `fixedDelay` counts from the end of the previous run, so runs never overlap and the acknowledgement wait is included. Keeping the logic in its own class lets a test call it directly with a mocked `QuotePublisher`.
+
+**Rejected:** a hand-written thread with `sleep`.
+
+## 15. Messages are plain JSON, with no Java type header
+
+**Decision:** values are written by Spring Kafka's `JacksonJsonSerializer` (Jackson 3) with `spring.json.add.type.headers=false`. Verified: the messages have no headers.
+
+**Why:** consumers (later blocks) should not need to know our class names.
+
+**Observed:** the key hashing sent parts `I` and `III` to partition 2, `II` to partition 1, and left partition 0 empty (see decision 5).

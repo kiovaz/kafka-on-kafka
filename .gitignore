@@ -23,6 +23,6 @@ Thumbs.db
 # Dependencies / build
 node_modules/
 target/
-build/
-dist/
-out/
+/build/
+/dist/
+/out/

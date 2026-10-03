@@ -1,0 +1,21 @@
+Some license header text that must never become a quote.
+
+*** START OF THE TEST BOOK ***
+
+This paragraph comes before any section marker.
+
+I
+
+First paragraph of part one,
+wrapped over two lines here.
+
+Short one.
+
+Second paragraph of part one is long enough.
+
+II
+
+Only paragraph of part two goes here.
+
+*** END OF THE TEST BOOK ***
+Footer license text from Project Gutenberg.

@@ -1,9 +1,21 @@
 spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+        max.block.ms: 10000
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/kafka}
     username: ${DB_USER:kafka}
     password: ${DB_PASSWORD:kafka}
   jpa:
     open-in-view: false
+
+app:
+  publisher:
+    enabled: ${APP_PUBLISHER_ENABLED:true}
+    delay-ms: ${PRODUCER_DELAY_MS:3000}
+  book:
+    config-path: ${BOOK_CONFIG_PATH:data/book-config.json}

@@ -1,0 +1,9 @@
+{
+  "title": "Test Book",
+  "file": "book.txt",
+  "startMarker": "*** START OF THE TEST BOOK",
+  "endMarker": "*** END OF THE TEST BOOK",
+  "sectionPattern": "^(I|II)$",
+  "chunking": "paragraph",
+  "minLength": 20
+}

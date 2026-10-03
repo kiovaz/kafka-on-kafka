@@ -57,7 +57,8 @@ The packages follow the hexagonal layout: what the app *is* (`domain`), what it 
 | `domain` | `Quote`, `EmotionResult`, `Emotion` — plain Java, no framework |
 | `application` | The use cases: publish the book, classify a quote, save a result, keep the live feed state |
 | `adapter.in.kafka` | Listeners that receive messages from the topics and call the use cases |
-| `adapter.in.web` | The SSE endpoint, `/stats`, and the startup trigger of the publisher |
+| `adapter.in.scheduler` | The timer that publishes the next quote of the book every `PRODUCER_DELAY_MS` |
+| `adapter.in.web` | The SSE endpoint and `/stats` |
 | `adapter.out.*` | Everything that reaches out: Kafka publishers, the Ollama classifier, JPA persistence, the book file reader |
 
 Classes call each other directly: **no interface is created until there is a second implementation** (for example, a second classifier besides Ollama). Tests simulate a class with Mockito instead of a hand-written interface.
@@ -155,7 +156,7 @@ Topics are created by the `kafka-init` container in Docker Compose.
 | `results-writer` | results writer | `emotions` |
 | `frontend` | live feed | `emotions` |
 
-- **Partitioning:** a book has few parts (3 for *The Metamorphosis*), so there are only 3 distinct keys. Kafka hashes the key to pick the partition, so two parts may land on the same partition and one partition may stay empty.
+- **Partitioning:** a book has few parts (3 for *The Metamorphosis*), so there are only 3 distinct keys. Kafka hashes the key to pick the partition, so two parts may land on the same partition and one partition may stay empty. With *The Metamorphosis* the key hashing puts parts `I` and `III` on partition 2, `II` on partition 1, and partition 0 stays empty.
 - **Scaling the classifier:** run more instances of the application and the `classifier` group splits the 3 partitions among them. Extra instances should run with `APP_PUBLISHER_ENABLED=false`, otherwise each one publishes the whole book again.
 - **Slow LLM:** the classifier listener uses `max.poll.records=1`, so it takes one excerpt, waits for Ollama and only then polls again. This keeps it well below the default `max.poll.interval.ms` (5 minutes), after which Kafka would consider it dead and remove it from the group.
 - **Lag:** if classification is slower than the publisher, check how far behind the classifier is with:
@@ -260,6 +261,7 @@ kafka-on-kafka/
     │   └── adapter/
     │       ├── in/
     │       │   ├── kafka/
+    │       │   ├── scheduler/
     │       │   └── web/
     │       └── out/
     │           ├── kafka/
@@ -286,7 +288,7 @@ Everything runs inside Docker, so services reach each other by name (`kafka:9092
 | ollama-init | `ollama/ollama`, pulls `qwen2.5:7b` and exits | — |
 | app | local build (Spring Boot), starts after `ollama-init` finishes | 8080 |
 
-The publisher's delay between excerpts is set with `PRODUCER_DELAY_MS` (default `3000`). A short delay (e.g. `500`) makes the classifier fall behind, which is a good way to watch lag grow; a delay longer than the model's response time keeps lag near zero.
+The publisher is configured with environment variables: `PRODUCER_DELAY_MS` (delay between excerpts, default `3000`), `APP_PUBLISHER_ENABLED` (`false` turns the publisher off and the book is not read) and `BOOK_CONFIG_PATH` (default `data/book-config.json`). A short delay (e.g. `500`) makes the classifier fall behind, which is a good way to watch lag grow; a delay longer than the model's response time keeps lag near zero.
 
 ## Running
 

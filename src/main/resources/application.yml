@@ -1,0 +1,9 @@
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/kafka}
+    username: ${DB_USER:kafka}
+    password: ${DB_PASSWORD:kafka}
+  jpa:
+    open-in-view: false

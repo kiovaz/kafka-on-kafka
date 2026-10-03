@@ -217,7 +217,7 @@ CREATE TABLE IF NOT EXISTS classified_quotes (
 
 Kafka delivers messages at least once, and restarting the producer republishes the whole book, so the same result can arrive twice. The writer inserts with `ON CONFLICT DO NOTHING`, and the `UNIQUE (book, quote_id)` constraint makes duplicates harmless.
 
-The table keeps the history for later queries (e.g. dominant emotion per part of the book). The writer maps each `EmotionResult` to a `ClassifiedQuoteEntity` (the JPA class for this table).
+The table keeps the history for SQL queries (e.g. dominant emotion per part of the book), browsable through Adminer. The writer maps each `EmotionResult` to a `ClassifiedQuoteEntity` (the JPA class for this table).
 
 ## Real-Time Frontend
 
@@ -265,6 +265,7 @@ Everything runs inside Docker, so services reach each other by name (`kafka:9092
 | kafka | `apache/kafka` (KRaft mode), internal listener `kafka:9092`, external listener for host tools | 29092 |
 | kafka-init | `apache/kafka`, creates the topics and exits | — |
 | postgres | `postgres:16` | 5432 |
+| adminer | `adminer`, web UI to browse the database | 8081 |
 | ollama | `ollama/ollama` | 11434 |
 | ollama-init | `ollama/ollama`, pulls `qwen2.5:7b` and exits | — |
 | producer | local build | — |
@@ -280,7 +281,21 @@ The producer's delay between excerpts is set with `PRODUCER_DELAY_MS` (default `
 docker compose up --build
 ```
 
-The first run downloads the model, which takes a while. Then open http://localhost:8080.
+The first run downloads the model, which takes a while. Then open http://localhost:8080 for the live view and http://localhost:8081 (Adminer; system `PostgreSQL`, server `postgres`) to browse the database.
+
+Example queries on `classified_quotes`:
+
+```sql
+-- emotions per part of the book
+SELECT part, emotion, count(*) FROM classified_quotes GROUP BY part, emotion ORDER BY part, count(*) DESC;
+
+-- dominant emotion per part
+SELECT DISTINCT ON (part) part, emotion, count(*)
+FROM classified_quotes GROUP BY part, emotion ORDER BY part, count(*) DESC;
+
+-- excerpts the model couldn't classify
+SELECT quote_id, text FROM classified_quotes WHERE emotion = 'unknown';
+```
 
 ## Design Decisions
 

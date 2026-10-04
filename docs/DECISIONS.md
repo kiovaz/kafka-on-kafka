@@ -163,3 +163,11 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 **Observed, not fixed yet:** the 3B model still leans on `alienation` (about 55% of the excerpts) and never answers `bureaucracy`, even for the chief-clerk passages. Adding the category definitions did not change that. Adding seven example passages moved the bias instead of removing it (`confusion` took 57 of 97, probably because the last example was a `confusion` one: recency bias), so any examples must be balanced and shuffled. These checks were done with a script outside the repository, not part of the build. A larger model is the likely fix but the 7B one froze the machine.
 
 **Rejected:** a fixed seed (not needed at temperature 0).
+
+## 21. No cloud LLM provider (the Claude API was considered and dropped)
+
+**Decision:** the classifier keeps using only the local Ollama model. A switch between Ollama and the Claude API (a small `LlmClient` interface with two implementations, `LLM_PROVIDER`, `ANTHROPIC_API_KEY`) was planned and cancelled before any code was written.
+
+**Why:** the Claude API is billed separately from a Claude subscription (it needs its own API credits), and the owner does not want to pay for it in this project.
+
+**Consequence:** the quality problems of the 3B model (decision 20) have to be handled locally: balanced and shuffled examples in the prompt, a different set of categories, a larger local model if the machine allows it, or accepting a stable but imperfect classifier. The interface split is still the right move if a second provider ever appears (decision 2).

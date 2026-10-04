@@ -4,7 +4,7 @@
 
 The goal is to put the core Kafka concepts into practice — producers, consumers, topics, partitions, consumer groups, offsets and lag — with a small but complete pipeline.
 
-A publisher sends excerpts from *The Metamorphosis*, one at a time with a delay between them, simulating a continuous stream. A consumer reads each excerpt and sends it to a local LLM (Ollama, `qwen2.5:7b`), which classifies the excerpt's emotional tone (anxiety, absurdity, resignation, alienation, bureaucracy, despair, confusion). The result is published to a second topic, then stored and shown live on a small real-time frontend.
+A publisher sends excerpts from *The Metamorphosis*, one at a time with a delay between them, simulating a continuous stream. A consumer reads each excerpt and sends it to a local LLM (Ollama, `qwen2.5:3b`), which classifies the excerpt's emotional tone (anxiety, absurdity, resignation, alienation, bureaucracy, despair, confusion). The result is published to a second topic, then stored and shown live on a small real-time frontend.
 
 It is a single Spring Boot application using Spring Kafka, organized with hexagonal architecture (ports and adapters).
 
@@ -18,9 +18,9 @@ It is a single Spring Boot application using Spring Kafka, organized with hexago
 - One Spring Boot application, one Maven module, hexagonal architecture
 - Book-agnostic text source: `book-config.json` defines the book's text file, where it starts and ends, how sections are detected and how it is chunked — switching books requires no code changes (the 8 emotion categories are fixed and tuned for Kafka's themes)
 - Two Kafka topics: one for raw excerpts, one for classified results
-- Results stored in PostgreSQL
+- Results stored in PostgreSQL (Neon, a hosted database; no local Postgres container)
 - Simple, real-time frontend (HTML/JS + Server-Sent Events) showing classifications as they happen
-- Fully local execution, everything orchestrated via Docker Compose (Kafka, Postgres, Ollama and the application)
+- Everything runs locally through Docker Compose (Kafka, Ollama and the application) except the database, which is hosted on Neon
 
 **Out of scope (for now):**
 
@@ -36,7 +36,7 @@ flowchart LR
     B[(Book file)] --> P[Publisher]
     P --> T1[Topic<br/><small>quotes</small>]
     T1 --> C[Classifier]
-    C -->|calls local Ollama| O[(Ollama<br/>qwen2.5:7b)]
+    C -->|calls local Ollama| O[(Ollama<br/>qwen2.5:3b)]
     C --> T2[Topic<br/><small>emotions</small>]
     T2 --> W[Results Writer]
     T2 --> F[Live Feed]
@@ -76,7 +76,7 @@ Classes call each other directly: **no interface is created until there is a sec
 | Live updates | Spring Web (`SseEmitter`) | Streams results to the browser |
 | Serialization | Jackson | Java objects <-> JSON |
 | Kafka broker | Docker Compose (KRaft mode) | Local Kafka, no Zookeeper |
-| Local LLM | Ollama + `qwen2.5:7b` | Emotional-tone classification |
+| Local LLM | Ollama + `qwen2.5:3b` | Emotional-tone classification |
 | Orchestration | Docker Compose | Brings up everything with one command |
 
 ## Book Configuration
@@ -104,15 +104,16 @@ At startup the publisher:
 
 ## LLM Integration
 
-**Endpoint:** `POST http://ollama:11434/api/generate` (Ollama's API, reached by service name inside the Docker network)
+**Endpoint:** `POST http://ollama:11434/api/generate` (Ollama's API, reached by service name inside the Docker network). From the host (running the app from the IDE) it is `http://localhost:11434`. Configured with `OLLAMA_URL`, `OLLAMA_MODEL` (default `qwen2.5:3b`) and `OLLAMA_TIMEOUT_SECONDS` (default `120`).
 
 **Request (example):**
 
 ```json
 {
-  "model": "qwen2.5:7b",
+  "model": "qwen2.5:3b",
   "prompt": "Classify the emotional tone of this excerpt in exactly one word from this list: anxiety, absurdity, resignation, alienation, bureaucracy, despair, confusion. Respond with only the word.\n\nExcerpt: \"<excerpt text>\"",
-  "stream": false
+  "stream": false,
+  "options": { "temperature": 0 }
 }
 ```
 
@@ -120,7 +121,7 @@ At startup the publisher:
 
 ```json
 {
-  "model": "qwen2.5:7b",
+  "model": "qwen2.5:3b",
   "response": "alienation",
   "done": true
 }
@@ -137,9 +138,15 @@ At startup the publisher:
 - confusion
 - unknown — fallback, never sent in the prompt
 
-**Handling the response:** the classifier extracts the `response` field, then normalizes it (trim, lowercase, strip punctuation, keep the first word). If the result isn't one of the seven categories, the emotion is `unknown`. If the Ollama call fails (timeout or HTTP error), it retries 3 times and then also falls back to `unknown`, so one bad excerpt never blocks the topic.
+**Handling the response:** the classifier extracts the `response` field, then normalizes it (trim, lowercase, strip punctuation, keep the first word). If the result isn't one of the seven categories, the emotion is `unknown`. If the call fails it retries 3 times. If it still fails for a reason that can fix itself (Ollama unreachable, a timeout, a server error, an unreadable answer) the classifier keeps retrying that excerpt until Ollama answers, so nothing is lost or recorded wrongly; if the request is rejected with a client error (4xx), which retrying cannot fix, it falls back to `unknown` so one bad excerpt never blocks the topic.
 
 The classification is attached to the original excerpt before publishing to `emotions`.
+
+**Temperature 0.** The request sets `options.temperature` to 0. With Ollama's default the same prompt on the same 97 excerpts gave a different emotion for 31 of them (32%) between two runs, so the results were partly random; at 0 the answer for an excerpt is always the same.
+
+**Measured with `qwen2.5:3b` on an RTX 4050 (100% GPU, about 2.2 GB of VRAM):** a warm call takes about 0.15 s; the first call after a cold start took 149 s on this machine (Windows with little free RAM), which is why `ollama-init` loads the model once and `OLLAMA_KEEP_ALIVE=-1` keeps it loaded. Classifying the whole book (97 excerpts) took about 55 s, with no `unknown`. The model leans heavily on one answer: 55 of the 97 excerpts came out as `alienation`, 23 `despair`, 9 `confusion`, 6 `resignation`, 4 `anxiety`, and `absurdity` and `bureaucracy` did not appear in the book.
+
+**If Ollama is down**, the classifier waits: after 3 failed attempts it retries the same excerpt every few seconds until Ollama answers, nothing is recorded as `unknown` because of the outage, and `quotes` just builds up lag. In a test with Ollama stopped for about a minute, all 97 excerpts were still classified exactly once, none skipped, after it came back (the model reloads on the first call). The first version of this rule recorded `unknown` instead and produced 34 permanent wrong results in the same test.
 
 ## Kafka Setup
 
@@ -233,7 +240,7 @@ CREATE TABLE IF NOT EXISTS classified_quotes (
 
 Kafka delivers messages at least once, and restarting the application republishes the whole book, so the same result can arrive twice. The writer inserts with `ON CONFLICT DO NOTHING`, and the `UNIQUE (book, quote_id)` constraint makes duplicates harmless.
 
-The table keeps the history for SQL queries (e.g. dominant emotion per part of the book), browsable through Adminer. The persistence adapter maps each `EmotionResult` to a `ClassifiedQuoteEntity` (the JPA class for this table), so the domain record stays free of JPA.
+The table keeps the history for SQL queries (e.g. dominant emotion per part of the book), browsable in the Neon console. The persistence adapter maps each `EmotionResult` to a `ClassifiedQuoteEntity` (the JPA class for this table), so the domain record stays free of JPA.
 
 ## Real-Time Frontend
 
@@ -276,16 +283,14 @@ kafka-on-kafka/
 
 ## Docker Compose — Services
 
-Everything runs inside Docker, so services reach each other by name (`kafka:9092`, `ollama:11434`, `postgres:5432`), configured through environment variables.
+Kafka, Ollama and the application run inside Docker, so they reach each other by name (`kafka:9092`, `ollama:11434`), configured through environment variables. The database is not a container: it is a hosted PostgreSQL on Neon, reached with the `DB_URL`, `DB_USER` and `DB_PASSWORD` settings from the git-ignored `.env` file (copy `.env.example`; never commit it).
 
 | Service | Image/Build | Port (host) |
 | --- | --- | --- |
 | kafka | `apache/kafka` (KRaft mode), internal listener `kafka:9092`, external listener for host tools | 29092 |
 | kafka-init | `apache/kafka`, creates the topics and exits | — |
-| postgres | `postgres:16` | 5432 |
-| adminer | `adminer`, web UI to browse the database | 8081 |
-| ollama | `ollama/ollama` | 11434 |
-| ollama-init | `ollama/ollama`, pulls `qwen2.5:7b` and exits | — |
+| ollama | `ollama/ollama:0.35.1`, uses the NVIDIA GPU, keeps the model loaded (`OLLAMA_KEEP_ALIVE=-1`) | 11434 |
+| ollama-init | `ollama/ollama:0.35.1`, pulls `qwen2.5:3b`, loads it once on the GPU and exits | — |
 | app | local build (Spring Boot), starts after `ollama-init` finishes | 8080 |
 
 The publisher is configured with environment variables: `PRODUCER_DELAY_MS` (delay between excerpts, default `3000`), `APP_PUBLISHER_ENABLED` (`false` turns the publisher off and the book is not read) and `BOOK_CONFIG_PATH` (default `data/book-config.json`). A short delay (e.g. `500`) makes the classifier fall behind, which is a good way to watch lag grow; a delay longer than the model's response time keeps lag near zero.
@@ -296,7 +301,7 @@ The publisher is configured with environment variables: `PRODUCER_DELAY_MS` (del
 docker compose up --build
 ```
 
-The first run downloads the model, which takes a while. Then open http://localhost:8080 for the live view and http://localhost:8081 (Adminer; system `PostgreSQL`, server `postgres`, user, password and database `kafka`) to browse the database.
+The first run downloads the model, which takes a while. Then open http://localhost:8080 for the live view. Browse the database in the Neon console (Tables or SQL Editor). Before running, create `.env` from `.env.example` with your Neon connection; the app reads it on startup, from the IDE or from Maven.
 
 Example queries on `classified_quotes`:
 

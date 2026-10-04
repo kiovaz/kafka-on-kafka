@@ -33,24 +33,36 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic quotes --partitions 3
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic emotions --partitions 3 --config retention.ms=-1
 
-  postgres:
-    image: postgres:16
+  ollama:
+    image: ollama/ollama:0.35.1
     ports:
-      - "5432:5432"
+      - "11434:11434"
     environment:
-      POSTGRES_USER: kafka
-      POSTGRES_PASSWORD: kafka
-      POSTGRES_DB: kafka
+      OLLAMA_KEEP_ALIVE: "-1"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ollamadata:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      retries: 20
 
-  adminer:
-    image: adminer:6.1.1
-    ports:
-      - "8081:8080"
+  ollama-init:
+    image: ollama/ollama:0.35.1
+    depends_on:
+      ollama:
+        condition: service_healthy
     environment:
-      ADMINER_DEFAULT_SERVER: postgres
+      OLLAMA_HOST: ollama:11434
+    # download the model, then load it once so the slow first load happens here
+    entrypoint: ["sh", "-c", "ollama pull ${OLLAMA_MODEL:-qwen2.5:3b} && ollama run ${OLLAMA_MODEL:-qwen2.5:3b} ok"]
 
 volumes:
   kafkadata:
-  pgdata:
+  ollamadata:

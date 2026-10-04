@@ -1,9 +1,4 @@
-# app-config Specification
-
-## Purpose
-Defines how the application starts and finds Kafka and PostgreSQL, so it runs from the IDE against the Docker infrastructure and inside Docker with only environment variables changed.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Starts against the local infrastructure
 With the Docker infrastructure (Kafka and Ollama) running and the database connection configured, the application SHALL start and serve HTTP on port 8080, connecting to Kafka at `localhost:29092` and to the hosted PostgreSQL named by the database settings.
@@ -30,6 +25,8 @@ The Kafka address SHALL be overridable by the environment variable `KAFKA_BOOTST
 #### Scenario: Database settings from the .env file
 - **WHEN** `DB_URL`, `DB_USER` and `DB_PASSWORD` are set only in a `.env` file in the project root
 - **THEN** the application connects to that database
+
+## ADDED Requirements
 
 ### Requirement: No secret in versioned files
 The database password SHALL NOT appear in any file tracked by Git or in the application log. The `.env` file SHALL be ignored by Git, and a `.env.example` with placeholders SHALL be versioned.

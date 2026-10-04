@@ -28,13 +28,6 @@ The system SHALL create the topics `quotes` and `emotions`, each with 3 partitio
 - **WHEN** the stack is started again with the topics already present
 - **THEN** the topic-creation step completes successfully and the topics are unchanged
 
-### Requirement: Database is available and browsable
-The system SHALL run PostgreSQL 16 on host port 5432 and a web database UI (Adminer) on host port 8081 that can open the Postgres database.
-
-#### Scenario: Open the database in the browser
-- **WHEN** a user opens `http://localhost:8081` and logs in with system `PostgreSQL`, server `postgres` and the configured credentials
-- **THEN** the database's tables are listed (empty until the writer service exists)
-
 ### Requirement: Kafka data survives restarts
 The system SHALL keep Kafka topics and their messages across `docker compose down` and `up`, and SHALL only delete them when the volumes are removed explicitly.
 
@@ -42,9 +35,26 @@ The system SHALL keep Kafka topics and their messages across `docker compose dow
 - **WHEN** a message is published to `quotes` and the stack is stopped with `docker compose down` and started again
 - **THEN** the topics keep the same TopicId and the message can still be read from the beginning
 
-### Requirement: Database data survives restarts
-The system SHALL keep Postgres data across `docker compose down` and `up`, and SHALL only delete it when the volumes are removed explicitly.
+### Requirement: Ollama with the model, on the GPU
+The stack SHALL run Ollama (a pinned version) on host port 11434, configured to use the machine's NVIDIA GPU, and SHALL download the model named by `OLLAMA_MODEL` (default `qwen2.5:3b`) automatically on the first start with a one-shot container that then exits successfully. The downloaded model SHALL be kept across `docker compose down` and `up`.
 
-#### Scenario: Restart without volume removal
+#### Scenario: First start
+- **WHEN** the stack starts for the first time
+- **THEN** the model is downloaded and listed by Ollama
+- **AND** the download container exits with code 0
+
+#### Scenario: Later starts
 - **WHEN** the stack is stopped with `docker compose down` and started again
-- **THEN** previously stored database data is still present
+- **THEN** the model is still listed and is not downloaded again
+
+#### Scenario: Answering a request
+- **WHEN** a request is sent to `POST http://localhost:11434/api/generate` with the model, a prompt and `stream` false
+- **THEN** the response contains a `response` text and `done` true
+
+#### Scenario: Running on the GPU
+- **WHEN** the model has answered a request on a machine with an NVIDIA GPU
+- **THEN** Ollama reports the model as running on the GPU
+
+#### Scenario: Model ready after start
+- **WHEN** the download container has finished
+- **THEN** the model is already loaded and stays loaded, so the first request does not wait for the model to load

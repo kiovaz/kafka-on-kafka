@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:file:./.env[.properties]
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
     producer:
@@ -6,10 +8,17 @@ spring:
       properties:
         spring.json.add.type.headers: false
         max.block.ms: 10000
+    consumer:
+      auto-offset-reset: earliest
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: com.kiovaz.kafkaonkafka.domain
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/kafka}
-    username: ${DB_USER:kafka}
-    password: ${DB_PASSWORD:kafka}
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
   jpa:
     open-in-view: false
 
@@ -19,3 +28,8 @@ app:
     delay-ms: ${PRODUCER_DELAY_MS:3000}
   book:
     config-path: ${BOOK_CONFIG_PATH:data/book-config.json}
+  ollama:
+    url: ${OLLAMA_URL:http://localhost:11434}
+    model: ${OLLAMA_MODEL:qwen2.5:3b}
+    timeout-seconds: ${OLLAMA_TIMEOUT_SECONDS:120}
+    retry-delay-ms: 1000

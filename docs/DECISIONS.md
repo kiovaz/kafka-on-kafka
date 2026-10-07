@@ -10,9 +10,9 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 
 **Rejected:** five Maven modules (`common` + four services) to keep plain-Kafka and Spring code apart. It was built and thrown away: five `pom.xml` files and a shared module for a very small codebase. Search results on hexagonal Java projects also recommend staying single-module for small projects.
 
-## 2. Hexagonal package layout, but no interface without a second implementation
+## 2. Packages by responsibility, and no interface without a second implementation
 
-**Decision:** packages follow `domain` / `application` / `adapter.in` / `adapter.out`. Classes call each other directly; an interface is created only when a second implementation appears.
+**Decision:** packages follow `domain` / `application` / `adapter.in` / `adapter.out`. Classes call each other directly; an interface is created only when a second implementation appears. This is plain Spring Boot layering, not a strict hexagonal architecture: `application` imports adapter classes (`ClassifyQuote` uses `EmotionClassifier`, `SaveResult` uses `ResultRepository`) and there are no ports. The README and this record no longer claim otherwise.
 
 **Why:** the layout keeps the code organized by role. An interface with a single implementation (a "port") only adds a file. Tests can simulate a class with Mockito.
 
@@ -158,7 +158,7 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 
 **Decision:** the request to Ollama sets `options.temperature` to 0.
 
-**Why:** with Ollama's default temperature, running the same prompt twice on the same 97 excerpts changed the emotion of 31 of them (32%); only 43 of 97 kept the same emotion across four prompt variants. At 0 the model always picks its most likely answer, so the result for an excerpt is repeatable (a restart that republishes the book gets the same labels).
+**Why:** with Ollama's default temperature, running the same prompt twice on the same 97 excerpts changed the emotion of 31 of them (32%); only 43 of 97 kept the same emotion across four prompt variants. At 0 the model picks its most likely answer, so the result is repeatable in most cases, but not always: between two runs at 0, 5 of the 97 labels (about 5%) differed (GPU arithmetic is not bit-exact). A restart that republishes the book therefore gets almost the same labels, and the first stored row for a quote wins anyway (decision 10).
 
 **Observed, not fixed yet:** the 3B model still leans on `alienation` (about 55% of the excerpts) and never answers `bureaucracy`, even for the chief-clerk passages. Adding the category definitions did not change that. Adding seven example passages moved the bias instead of removing it (`confusion` took 57 of 97, probably because the last example was a `confusion` one: recency bias), so any examples must be balanced and shuffled. These checks were done with a script outside the repository, not part of the build. A larger model is the likely fix but the 7B one froze the machine.
 
@@ -197,3 +197,19 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 **Rejected:** building the jar on the host, copying the data into the image (the book could not be changed without a rebuild), and running tests in the image build.
 
 **Risk:** the whole stack may not fit in the Docker memory; checked at the end with `docker stats`.
+
+## 25. Topics are created only by `kafka-init`, and a wrong topic is an error
+
+**Decision:** the broker runs with `KAFKA_AUTO_CREATE_TOPICS_ENABLE=false`, and `kafka-init` describes `quotes` and `emotions` after creating them and exits with an error if a topic does not have 3 partitions or `emotions` lacks `retention.ms=-1`.
+
+**Why:** during a manual check a leftover app instance kept running and touched the topics while they were deleted. The broker auto-created them with 1 partition and default retention, and `kafka-init --if-not-exists` skipped them silently, so the next run looked fine but could not show rebalancing or the partition keys. Both layers are needed: auto-creation off stops the cause, the check stops any other way a wrong topic gets there.
+
+**Rejected:** deleting and recreating on a mismatch (silently destroys data); relying on the docs only.
+
+**Cost:** a client that starts before `kafka-init` finishes fails with unknown-topic warnings until the topics exist. Compose orders the app after `kafka-init`; from the IDE start the stack first.
+
+## 26. What "done" means for this project
+
+**Decision:** the code, the tests and the docs are finished when they are committed, the docs claim only what was measured, and every check that still needs the real system has a recipe in `docs/RUNBOOK.md` with its expected result. A check is ticked only after it was run, with the evidence in the task line.
+
+**Why:** the unit tests (47) prove the logic with mocks, not the Kafka, Ollama, Neon or Docker behaviour. Saying "finished" without those runs would repeat the over-claims already corrected in decisions 2 and 20.

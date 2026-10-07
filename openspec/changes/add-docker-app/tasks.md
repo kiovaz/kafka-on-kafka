@@ -1,4 +1,4 @@
-> **Status:** the files are written. Nothing has been built or run yet (decision of the owner: run everything once all blocks are coded), so no task below is ticked until it is verified in that run.
+> **Status:** the Dockerfile and the `app` service are written and the compose file parses (`docker compose config -q`). The image has never been built or run: every item below is open and is run by `docs/RUNBOOK.md`.
 
 ## 1. Image
 

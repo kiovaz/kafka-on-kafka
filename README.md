@@ -6,7 +6,7 @@ The goal is to put the core Kafka concepts into practice — producers, consumer
 
 A publisher sends excerpts from *The Metamorphosis*, one at a time with a delay between them, simulating a continuous stream. A consumer reads each excerpt and sends it to a local LLM (Ollama, `qwen2.5:3b`), which classifies the excerpt's emotional tone (anxiety, absurdity, resignation, alienation, bureaucracy, despair, confusion). The result is published to a second topic, then stored and shown live on a small real-time frontend.
 
-It is a single Spring Boot application using Spring Kafka, organized with hexagonal architecture (ports and adapters).
+It is a single Spring Boot application using Spring Kafka, organized in packages by responsibility (see Package layout).
 
 ## Scope
 
@@ -15,7 +15,7 @@ It is a single Spring Boot application using Spring Kafka, organized with hexago
 - Book: *The Metamorphosis*, public-domain English translation (Project Gutenberg)
 - Data and code language: English
 - Java 21 (LTS), using `record` for data models
-- One Spring Boot application, one Maven module, hexagonal architecture
+- One Spring Boot application, one Maven module, packages by responsibility
 - Book-agnostic text source: `book-config.json` defines the book's text file, where it starts and ends, how sections are detected and how it is chunked — switching books requires no code changes (the 8 emotion categories are fixed and tuned for Kafka's themes)
 - Two Kafka topics: one for raw excerpts, one for classified results
 - Results stored in PostgreSQL (Neon, a hosted database; no local Postgres container)
@@ -48,9 +48,9 @@ flowchart LR
 
 All of this runs inside one application, but the pieces stay decoupled by Kafka: the publisher never waits for the classifier. If the model is slower than the publisher, excerpts pile up in the `quotes` topic (consumer lag) and the classifier catches up later — nothing is lost.
 
-### Hexagonal layout
+### Package layout
 
-The packages follow the hexagonal layout: what the app *is* (`domain`), what it *does* (`application`), and what talks to the outside world (`adapter`).
+The packages group the code by responsibility: what the app *is* (`domain`), what it *does* (`application`), and what talks to the outside world (`adapter`). This is the usual Spring Boot layering with explicit names, **not** a strict hexagonal architecture: the `application` classes call the adapter classes directly (for example `ClassifyQuote` uses `EmotionClassifier`) and there are no port interfaces.
 
 | Package | Contents |
 | --- | --- |
@@ -142,7 +142,7 @@ At startup the publisher:
 
 The classification is attached to the original excerpt before publishing to `emotions`.
 
-**Temperature 0.** The request sets `options.temperature` to 0. With Ollama's default the same prompt on the same 97 excerpts gave a different emotion for 31 of them (32%) between two runs, so the results were partly random; at 0 the answer for an excerpt is always the same.
+**Temperature 0.** The request sets `options.temperature` to 0. With Ollama's default the same prompt on the same 97 excerpts gave a different emotion for 31 of them (32%) between two runs, so the results were partly random; at 0 it is repeatable in most cases but not all: between two runs at 0, 5 of the 97 labels (about 5%) still changed.
 
 **Measured with `qwen2.5:3b` on an RTX 4050 (100% GPU, about 2.2 GB of VRAM):** a warm call takes about 0.15 s; the first call after a cold start took 149 s on this machine (Windows with little free RAM), which is why `ollama-init` loads the model once and `OLLAMA_KEEP_ALIVE=-1` keeps it loaded. Classifying the whole book (97 excerpts) took about 55 s, with no `unknown`. The model leans heavily on one answer: 55 of the 97 excerpts came out as `alienation`, 23 `despair`, 9 `confusion`, 6 `resignation`, 4 `anxiety`, and `absurdity` and `bureaucracy` did not appear in the book.
 
@@ -322,11 +322,25 @@ FROM classified_quotes GROUP BY part, emotion ORDER BY part, count(*) DESC;
 SELECT quote_id, text FROM classified_quotes WHERE emotion = 'unknown';
 ```
 
+## Status and known limits
+
+**Verified:** 47 unit tests; one full run from the IDE (97 quotes classified, 97 rows in Neon, the live page equal to the table, events numbered in order, an invalid message skipped).
+
+**Not verified yet** (recipes and expected results in [docs/RUNBOOK.md](docs/RUNBOOK.md)): restart and republish behaviour, the writer catching up after a stop, a database outage, a second instance (rebalance), and the `app` container (never built or run).
+
+**Known limits:**
+- The classifier is biased: about 55% of the excerpts come out as `alienation` and `bureaucracy` never appears (decision 20).
+- Temperature 0 is repeatable in about 95% of the cases, not 100%.
+- A republished book is read again by the classifier, so the model is called again and the first stored result wins; the table does not grow, but the work is repeated.
+- Neon may be asleep: the first write after a pause can take a few seconds, and a failed write is retried every 2 s.
+- The live feed keeps all results in memory and rebuilds them from the start of `emotions` on every start; fine for one book, not for millions of messages.
+- Everything shares one Docker VM of about 3.9 GB (Kafka, Ollama, the app).
+
 ## Design Decisions
 
 The full record, with the reasons and what was rejected, is in [docs/DECISIONS.md](docs/DECISIONS.md). In short:
 
-- One Spring Boot application and one Maven module, with the hexagonal package layout inside it
+- One Spring Boot application and one Maven module, with packages by responsibility inside it
 - No interface without a second implementation
 - Kafka through Spring Kafka (`@KafkaListener`, `KafkaTemplate`)
 - Database: PostgreSQL on Neon through Spring JDBC (no JPA), with the emotion stored as text and the allowed values enforced by the Java `Emotion` enum

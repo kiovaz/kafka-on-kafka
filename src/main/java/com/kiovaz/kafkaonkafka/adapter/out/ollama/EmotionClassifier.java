@@ -68,7 +68,7 @@ public class EmotionClassifier {
     private String ask(String text) {
         Answer answer = ollama.post().uri("/api/generate")
                 .body(Map.of("model", model, "prompt", PROMPT.formatted(text), "stream", false,
-                        "options", Map.of("temperature", 0)))   // 0: the same excerpt always gets the same answer
+                        "options", Map.of("temperature", 0)))   // 0: the same excerpt almost always gets the same answer
                 .retrieve().body(Answer.class);
         if (answer == null || answer.response() == null) {
             throw new IllegalStateException("Ollama answered without a response field");

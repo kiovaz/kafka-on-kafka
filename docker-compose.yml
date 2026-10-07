@@ -30,10 +30,15 @@ services:
       kafka:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
+    # --if-not-exists keeps a topic that already exists, even a wrong one, so each topic is described afterwards
     command:
       - |
+        set -e
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic quotes --partitions 3
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic emotions --partitions 3 --config retention.ms=-1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic quotes | grep -q -E "PartitionCount: 3[^0-9]" || { echo "ERROR: topic quotes must have 3 partitions (delete it and run kafka-init again)" >&2; exit 1; }
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic emotions | grep -q -E "PartitionCount: 3[^0-9]" || { echo "ERROR: topic emotions must have 3 partitions (delete it and run kafka-init again)" >&2; exit 1; }
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic emotions | grep -q "retention.ms=-1" || { echo "ERROR: topic emotions must have retention.ms=-1 (delete it and run kafka-init again)" >&2; exit 1; }
 
   ollama:
     image: ollama/ollama:0.35.1

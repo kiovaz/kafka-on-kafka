@@ -70,7 +70,7 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 
 **Rejected:** having the frontend query PostgreSQL for the initial state.
 
-## 10. PostgreSQL stores the history, browsable in the Neon console
+## 10. PostgreSQL stores the history, browsable in the Neon console (the JPA part was replaced by decision 22)
 
 **Decision:** the results writer saves each result to `classified_quotes` with `UNIQUE (book, quote_id)` and `ON CONFLICT DO NOTHING`. The emotion is stored as text. The data is browsed in the Neon console (Tables and SQL Editor); Adminer was dropped when the database moved to Neon (decision 19).
 
@@ -171,3 +171,29 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 **Why:** the Claude API is billed separately from a Claude subscription (it needs its own API credits), and the owner does not want to pay for it in this project.
 
 **Consequence:** the quality problems of the 3B model (decision 20) have to be handled locally: balanced and shuffled examples in the prompt, a different set of categories, a larger local model if the machine allows it, or accepting a stable but imperfect classifier. The interface split is still the right move if a second provider ever appears (decision 2).
+
+## 22. The writer uses Spring JDBC, not JPA
+
+**Decision:** results are written with `JdbcClient` and one `INSERT ... ON CONFLICT DO NOTHING`; the project depends on `spring-boot-starter-jdbc`, not on the JPA starter, and there is no entity class. The table is created by `schema.sql` at every startup (`spring.sql.init.mode=always`, `CREATE TABLE IF NOT EXISTS`).
+
+**Why:** the only write is a native statement that JPA cannot express anyway, and nothing is read back, so JPA and Hibernate would only add startup time and memory on a machine short of both. `ON CONFLICT DO NOTHING` has no conflict target so the same SQL runs on PostgreSQL and on H2 in PostgreSQL mode, which the repository test uses.
+
+**Rejected:** keeping JPA for the sake of the original plan (decision 10 first said "JPA"), and a migration tool (Flyway, Liquibase) for a single table.
+
+## 23. The live feed keeps one result per quote, numbers its events and replays the topic
+
+**Decision:** the live feed rebuilds its state by seeking to the beginning of `emotions` whenever partitions are assigned. The state is a map keyed by (book, quote id), first result wins, and counts and latest are computed from it. Each new result gets a sequence number, used as the SSE event id; `/stats` reports the last one as `seq`, and the page ignores every event whose id is not greater than the `seq` of its snapshot. `record` and `stats` are synchronized.
+
+**Why:** replays and republished books must not double count. Merging by quote id on the page was not enough for the counts: an event arriving between the snapshot and the stream could be counted twice. Numbering the events makes it deterministic.
+
+**Cost:** a few more lines than the minimum (`FeedEvent`, `seq`, a lock); accepted because it removes a real double-counting bug.
+
+## 24. The app runs as a container built from the repository
+
+**Decision:** a multi-stage `Dockerfile` (`maven:3.9.16-eclipse-temurin-21` builds with `-DskipTests`, `eclipse-temurin:21.0.12_8-jre` runs as a non-root user), an `app` service in Compose that starts after `kafka-init` and `ollama-init` finish, uses `kafka:9092` and `http://ollama:11434`, mounts `./data` read-only, and is capped at 640 MB with a 384 MB heap. `.env` is excluded from the build context by `.dockerignore` and reaches the container only as environment variables (`env_file`).
+
+**Why:** one command runs the whole pipeline, with no Java or Maven on the host, and no secret baked into an image. The Docker VM has about 3.9 GB, shared with Kafka and Ollama, so the app is kept small.
+
+**Rejected:** building the jar on the host, copying the data into the image (the book could not be changed without a rebuild), and running tests in the image build.
+
+**Risk:** the whole stack may not fit in the Docker memory; checked at the end with `docker stats`.

@@ -59,7 +59,7 @@ The packages follow the hexagonal layout: what the app *is* (`domain`), what it 
 | `adapter.in.kafka` | Listeners that receive messages from the topics and call the use cases |
 | `adapter.in.scheduler` | The timer that publishes the next quote of the book every `PRODUCER_DELAY_MS` |
 | `adapter.in.web` | The SSE endpoint and `/stats` |
-| `adapter.out.*` | Everything that reaches out: Kafka publishers, the Ollama classifier, JPA persistence, the book file reader |
+| `adapter.out.*` | Everything that reaches out: Kafka publishers, the Ollama classifier, the PostgreSQL writer, the book file reader |
 
 Classes call each other directly: **no interface is created until there is a second implementation** (for example, a second classifier besides Ollama). Tests simulate a class with Mockito instead of a hand-written interface.
 
@@ -71,7 +71,7 @@ Classes call each other directly: **no interface is created until there is a sec
 | Build | Maven (single module) | Dependency management and build |
 | Framework | Spring Boot 4.1 | Application, configuration, web |
 | Kafka client | Spring Kafka (`@KafkaListener`, `KafkaTemplate`) | Publishing and consuming |
-| Persistence | Spring Data JPA + PostgreSQL | Stores classified results |
+| Persistence | Spring JDBC (`JdbcClient`) + PostgreSQL on Neon | Stores classified results with one `INSERT ... ON CONFLICT DO NOTHING` (no JPA: nothing is read back) |
 | LLM client | Spring `RestClient` | Calls Ollama |
 | Live updates | Spring Web (`SseEmitter`) | Streams results to the browser |
 | Serialization | Jackson | Java objects <-> JSON |
@@ -240,15 +240,16 @@ CREATE TABLE IF NOT EXISTS classified_quotes (
 
 Kafka delivers messages at least once, and restarting the application republishes the whole book, so the same result can arrive twice. The writer inserts with `ON CONFLICT DO NOTHING`, and the `UNIQUE (book, quote_id)` constraint makes duplicates harmless.
 
-The table keeps the history for SQL queries (e.g. dominant emotion per part of the book), browsable in the Neon console. The persistence adapter maps each `EmotionResult` to a `ClassifiedQuoteEntity` (the JPA class for this table), so the domain record stays free of JPA.
+The table keeps the history for SQL queries (e.g. dominant emotion per part of the book), browsable in the Neon console. The `ResultRepository` in `adapter.out.persistence` writes each `EmotionResult` with one SQL statement (`ON CONFLICT DO NOTHING`, so the first row for a quote wins); there is no entity class. `schema.sql` runs at every startup (`spring.sql.init.mode=always`) and is safe to repeat, and the writer reads `emotions` as the group `results-writer`, independent of the classifier and the live feed.
 
 ## Real-Time Frontend
 
 Served by the same application, and it reads only from Kafka, never from the database:
 
-- On startup, the live feed consumes `emotions` **from the beginning** (replay) and rebuilds in memory the running count of each emotion and the latest classifications. It doesn't rely on its committed offsets for this.
-- `GET /stats` returns that in-memory state, and `/events` (backed by Spring Web's `SseEmitter`) pushes every new classification to connected browsers. Both live in `adapter.in.web`.
-- The static page (`src/main/resources/static/index.html`, plain JavaScript) calls `/stats` on load to draw the current state, then listens via `EventSource` and updates the screen as new classifications arrive. Reloading the page doesn't reset the counts.
+- Whenever the group `frontend` is given partitions (at startup, after a rebalance), the live feed goes back to the **first message** of `emotions` and rebuilds its state in memory. It never relies on saved offsets. The topic keeps its messages forever, so this stays correct; the cost is that the replay grows with the topic (fine for a few hundred messages).
+- The state is one result per quote (the first result wins), and the counts and the latest list are computed from it, so a republished book or a replay changes nothing.
+- `GET /stats` returns `seq`, `total`, `counts` (all eight emotions, zeros included) and `latest` (the 20 newest). `GET /events` is a Server-Sent Events stream (`SseEmitter`) whose event ids are a sequence number. Both live in `adapter.in.web`.
+- The page (`src/main/resources/static/index.html`, plain JavaScript) opens the stream, loads `/stats`, ignores every event whose id is not greater than the snapshot's `seq` (so nothing is counted twice) and reloads the snapshot when the stream reconnects. Reloading the page does not reset the counts.
 
 ## Project Structure
 
@@ -291,7 +292,7 @@ Kafka, Ollama and the application run inside Docker, so they reach each other by
 | kafka-init | `apache/kafka`, creates the topics and exits | — |
 | ollama | `ollama/ollama:0.35.1`, uses the NVIDIA GPU, keeps the model loaded (`OLLAMA_KEEP_ALIVE=-1`) | 11434 |
 | ollama-init | `ollama/ollama:0.35.1`, pulls `qwen2.5:3b`, loads it once on the GPU and exits | — |
-| app | local build (Spring Boot), starts after `ollama-init` finishes | 8080 |
+| app | built from the `Dockerfile` (Spring Boot on a JRE 21, non-root), starts after `kafka-init` and `ollama-init` have finished, memory capped at 640 MB, `./data` mounted read-only | 8080 |
 
 The publisher is configured with environment variables: `PRODUCER_DELAY_MS` (delay between excerpts, default `3000`), `APP_PUBLISHER_ENABLED` (`false` turns the publisher off and the book is not read) and `BOOK_CONFIG_PATH` (default `data/book-config.json`). A short delay (e.g. `500`) makes the classifier fall behind, which is a good way to watch lag grow; a delay longer than the model's response time keeps lag near zero.
 
@@ -301,7 +302,11 @@ The publisher is configured with environment variables: `PRODUCER_DELAY_MS` (del
 docker compose up --build
 ```
 
-The first run downloads the model, which takes a while. Then open http://localhost:8080 for the live view. Browse the database in the Neon console (Tables or SQL Editor). Before running, create `.env` from `.env.example` with your Neon connection; the app reads it on startup, from the IDE or from Maven.
+Before the first run, create `.env` from `.env.example` with your Neon connection (`DB_URL`, `DB_USER`, `DB_PASSWORD`). The `.env` file is git-ignored, is never copied into the image (it reaches the container only as environment variables) and must never be committed. Do not paste the output of `docker compose config`: it expands those values.
+
+The first run downloads the Ollama model and builds the app image, which takes a while. Then open http://localhost:8080 for the live view. Browse the database in the Neon console (Tables or SQL Editor).
+
+**Run the app in one place only.** The `app` container and a copy started from the IDE (which reads the same `.env`) would both join the same consumer groups and both publish the book. Stop one of them, unless you are doing the two-instances experiment on purpose (the partitions are then shared between them).
 
 Example queries on `classified_quotes`:
 
@@ -324,7 +329,7 @@ The full record, with the reasons and what was rejected, is in [docs/DECISIONS.m
 - One Spring Boot application and one Maven module, with the hexagonal package layout inside it
 - No interface without a second implementation
 - Kafka through Spring Kafka (`@KafkaListener`, `KafkaTemplate`)
-- Database: PostgreSQL, with the emotion stored as text and the allowed values enforced by the Java `Emotion` enum
+- Database: PostgreSQL on Neon through Spring JDBC (no JPA), with the emotion stored as text and the allowed values enforced by the Java `Emotion` enum
 - Emotion categories: 7 fixed ones plus `unknown` as fallback
 - Excerpt granularity: by paragraph, configured in `book-config.json`
 - Two Kafka topics, decoupling classification from consuming the results

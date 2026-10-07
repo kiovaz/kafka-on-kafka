@@ -19,8 +19,9 @@ spring:
     url: ${DB_URL}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
-  jpa:
-    open-in-view: false
+  sql:
+    init:
+      mode: always
 
 app:
   publisher:

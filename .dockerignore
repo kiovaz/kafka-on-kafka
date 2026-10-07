@@ -1,0 +1,18 @@
+# secrets and local files never go into the build context
+.env
+.env.*
+!.env.example
+
+# not needed to build the jar
+.git
+.gitignore
+.idea
+.claude
+target
+data
+docs
+openspec
+README.md
+TODO.md
+Dockerfile
+docker-compose.yml

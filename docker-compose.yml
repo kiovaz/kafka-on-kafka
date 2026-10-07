@@ -15,6 +15,8 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # topics are created only by kafka-init (3 partitions); a client must never create one with the default of 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     volumes:
       - kafkadata:/var/lib/kafka/data
     healthcheck:
@@ -62,6 +64,25 @@ services:
       OLLAMA_HOST: ollama:11434
     # download the model, then load it once so the slow first load happens here
     entrypoint: ["sh", "-c", "ollama pull ${OLLAMA_MODEL:-qwen2.5:3b} && ollama run ${OLLAMA_MODEL:-qwen2.5:3b} ok"]
+
+  app:
+    build: .
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      ollama-init:
+        condition: service_completed_successfully
+    # DB_URL, DB_USER and DB_PASSWORD come from the git-ignored .env, only as environment of this container
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OLLAMA_URL: http://ollama:11434
+      JAVA_TOOL_OPTIONS: -Xmx384m
+    volumes:
+      - ./data:/app/data:ro
+    ports:
+      - "8080:8080"
+    mem_limit: 640m
 
 volumes:
   kafkadata:

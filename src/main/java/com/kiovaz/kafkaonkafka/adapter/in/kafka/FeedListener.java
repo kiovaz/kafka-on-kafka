@@ -18,7 +18,8 @@ class FeedListener implements ConsumerSeekAware {
         this.feed = feed;
     }
 
-    @KafkaListener(topics = "emotions", groupId = "frontend",
+    // one group per instance (random id): every instance must see ALL partitions of emotions, not a share of them
+    @KafkaListener(topics = "emotions", groupId = "frontend-${random.uuid}",
             properties = "spring.json.value.default.type=com.kiovaz.kafkaonkafka.domain.EmotionResult")
     void on(EmotionResult result) {
         feed.record(result);

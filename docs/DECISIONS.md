@@ -44,7 +44,7 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 
 ## 6. Three consumer groups
 
-**Decision:** `classifier` (reads `quotes`), `results-writer` and `frontend` (both read `emotions`).
+**Decision:** `classifier` (reads `quotes`), `results-writer` and `frontend-<random>` (both read `emotions`; the feed uses a new random group id per instance, because each instance must read all partitions to hold the full state, whereas the writer shares partitions).
 
 **Why:** separate groups let two consumers get every classified result independently, which is the core Kafka lesson of the project.
 
@@ -126,7 +126,7 @@ Short record of what was decided, why, and what was rejected. Newest decisions g
 
 ## 17. The classifier reads from the beginning and never loses a result
 
-**Decision:** the `classifier` group uses `auto-offset-reset: earliest`, one message per poll, and values go through `ErrorHandlingDeserializer` wrapping `JacksonJsonDeserializer` (no type headers; the default type is set per listener). A `DefaultErrorHandler` with a 2 s fixed back-off and no attempt limit retries the same message when the listener throws, which only happens when publishing the result fails. A message that cannot be read is logged once (`DeserializationException`) and skipped.
+**Decision:** the `classifier` group uses `auto-offset-reset: earliest`, one message per poll, and values go through `ErrorHandlingDeserializer` wrapping `JacksonJsonDeserializer` (no type headers; the default type is set per listener). A `DefaultErrorHandler` with a 2 s fixed back-off and no attempt limit retries the same message when the listener throws, which happens when publishing the result fails, when the Ollama classifier gives up after retryable failures, and (for the writer) when the database fails. A message that cannot be read is logged once (`DeserializationException`) and skipped.
 
 **Why:** a new group must read what the publisher already wrote; a result lost in a short Kafka hiccup is worse than a short wait; one unreadable message must not stall the partition.
 

@@ -1,6 +1,7 @@
 # Stops whatever listens on port 8080 (the app, from the IDE or a leftover) and PROVES the port is free.
 # Prints "port 8080 is free" only after checking; exits 1 otherwise.
 $conns = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue
+if (docker ps --filter "publish=8080" -q) { Write-Host "ERROR: a container publishes 8080: run docker compose stop app instead"; exit 1 }
 foreach ($c in $conns) {
     Write-Host "stopping process $($c.OwningProcess) ($((Get-Process -Id $c.OwningProcess).ProcessName))"
     Stop-Process -Id $c.OwningProcess -Force

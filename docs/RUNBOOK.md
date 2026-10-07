@@ -22,7 +22,7 @@ Everything here needs Docker, Kafka, Ollama and Neon, so it is run by hand, in t
 6. `docker compose up -d ollama ollama-init` and wait until `docker compose ps -a` shows `ollama-init` as `Exited (0)`.
 7. Empty the table: `bash scripts/neon-sql.sh "TRUNCATE TABLE classified_quotes RESTART IDENTITY"` and check `SELECT count(*)` returns `0`.
 8. Delete the old consumer groups so everything is read from the start:
-   `for g in classifier results-writer frontend; do docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group $g; done` (a group that does not exist gives an error: ignore it).
+   `for g in classifier results-writer $(docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list | grep frontend); do docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group $g; done` (a group that does not exist gives an error: ignore it).
 
 ## 1. Blocks 5 and 6 (app from the IDE)
 
@@ -38,9 +38,9 @@ Start the app from the IDE with the publisher on (default). Wait about 5 minutes
 | 6.3 restart replay | restart the app, open `http://localhost:8080/stats` after ~10 s | `total` 97 again |
 | 6.4 republish does not grow | after the restart above (the publisher republishes) wait for it to finish | `total` stays 97 |
 | 6.5 two tabs | two tabs open during a run, close one | the other keeps updating |
-| 6.6 second instance | start a second app with `SERVER_PORT=8081 APP_PUBLISHER_ENABLED=false`; wait ~15 s | both `/stats` (8080 and 8081) show `total` 97; the log of each shows its partitions assigned/revoked |
+| 6.6 second instance | start a second app with `SERVER_PORT=8081 APP_PUBLISHER_ENABLED=false`; wait ~15 s | both `/stats` (8080 and 8081) show `total` 97 (each feed instance uses its own group and reads all partitions); the log of each shows its partitions assigned/revoked |
 
-Expected log lines to look for: `Added`/`Ignored` from the writer, `partitions assigned` on rebalance.
+Expected log lines to look for: `Saved ...` and `Already saved, ignored ...` from the writer, `partitions assigned` on rebalance.
 
 ## 2. Block 7 (the app in a container)
 
@@ -49,7 +49,7 @@ Expected log lines to look for: `Added`/`Ignored` from the writer, `partitions a
 3. 4.1: `docker run --rm --entrypoint sh kafka-on-kafka-app -c "ls -a /app | grep -c '^.env$'; id -u"` → `0` and a uid that is not `0`. (The image name comes from `docker images`.)
 4. 4.3: `http://localhost:8080` updates live; `bash scripts/neon-sql.sh "SELECT count(*) FROM classified_quotes"` → `97`.
 5. 4.4: `docker stats --no-stream` while it runs → the `app` MEM USAGE under 640 MiB, and no container `OOMKilled` (`docker inspect -f '{{.State.OOMKilled}}' kafka-on-kafka-app-1` → `false`).
-6. 4.5: edit `data/book-config.json` (for example the book name), `docker compose restart app`, check the log shows the new value, no rebuild.
+6. 4.5: edit `data/book-config.json` (for example the book name), `docker compose restart app`, check the quote count in the log (`Published ...`) changed, no rebuild.
 
 ## 3. Block 8: Kafka experiments (to learn)
 
@@ -58,7 +58,7 @@ Expected log lines to look for: `Added`/`Ignored` from the writer, `partitions a
 | Lag grows and drains | start the app with `PRODUCER_DELAY_MS=500`; run `kafka-consumer-groups.sh --describe --group classifier` every few seconds | `LAG` rises while the model is slower than the publisher, then falls to 0 |
 | Partitions and keys | `kafka-console-consumer.sh --topic quotes --from-beginning --property print.partition=true --property print.key=true --max-messages 100` | all of part `II` in partition 1, `I` and `III` in partition 2, partition 0 empty |
 | Two instances share the work | second instance as in 6.6, watch `--describe --group classifier` | the three partitions are split between two consumers; stop one and they move back |
-| Stop and resume | stop the app mid-run, wait, start it | it continues from the committed offset, nothing is classified twice in the table |
+| Stop and resume | stop the app mid-run, wait, start it | with `APP_PUBLISHER_ENABLED=false` it continues from the committed offset; with the publisher on, each start republishes the book (the table still has no duplicates) |
 | Another book | change `book-config.json` to another file and restart | new quotes appear; `SELECT book, count(*) ... GROUP BY book` shows both books |
 
 ## Failure modes already seen

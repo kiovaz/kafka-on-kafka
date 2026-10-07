@@ -161,11 +161,11 @@ Topics are created by the `kafka-init` container in Docker Compose.
 | --- | --- | --- |
 | `classifier` | classifier | `quotes` |
 | `results-writer` | results writer | `emotions` |
-| `frontend` | live feed | `emotions` |
+| `frontend-<random>` | live feed (a new group per instance and per start, so each instance reads every partition; old ones are left empty) | `emotions` |
 
 - **Partitioning:** a book has few parts (3 for *The Metamorphosis*), so there are only 3 distinct keys. Kafka hashes the key to pick the partition, so two parts may land on the same partition and one partition may stay empty. With *The Metamorphosis* the key hashing puts parts `I` and `III` on partition 2, `II` on partition 1, and partition 0 stays empty.
 - **Scaling the classifier:** run more instances of the application and the `classifier` group splits the 3 partitions among them. Extra instances should run with `APP_PUBLISHER_ENABLED=false`, otherwise each one publishes the whole book again.
-- **Slow LLM:** the classifier listener uses `max.poll.records=1`, so it takes one excerpt, waits for Ollama and only then polls again. This keeps it well below the default `max.poll.interval.ms` (5 minutes), after which Kafka would consider it dead and remove it from the group.
+- **Slow LLM:** the classifier listener uses `max.poll.records=1`, so it takes one excerpt, waits for Ollama and only then polls again. While Ollama answers normally (about 0.15 s) this stays far below the default `max.poll.interval.ms` (5 minutes); if Ollama hangs, 3 attempts of up to 120 s can exceed it (about 362 s), and then Kafka would consider it dead and remove it from the group.
 - **Lag:** if classification is slower than the publisher, check how far behind the classifier is with:
   `docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group classifier`
 
@@ -246,7 +246,7 @@ The table keeps the history for SQL queries (e.g. dominant emotion per part of t
 
 Served by the same application, and it reads only from Kafka, never from the database:
 
-- Whenever the group `frontend` is given partitions (at startup, after a rebalance), the live feed goes back to the **first message** of `emotions` and rebuilds its state in memory. It never relies on saved offsets. The topic keeps its messages forever, so this stays correct; the cost is that the replay grows with the topic (fine for a few hundred messages).
+- Whenever the feed group (`frontend-<random>`, one per instance) is given partitions (at startup, after a rebalance), the live feed goes back to the **first message** of `emotions` and rebuilds its state in memory. It never relies on saved offsets. The topic keeps its messages forever, so this stays correct; the cost is that the replay grows with the topic (fine for a few hundred messages).
 - The state is one result per quote (the first result wins), and the counts and the latest list are computed from it, so a republished book or a replay changes nothing.
 - `GET /stats` returns `seq`, `total`, `counts` (all eight emotions, zeros included) and `latest` (the 20 newest). `GET /events` is a Server-Sent Events stream (`SseEmitter`) whose event ids are a sequence number. Both live in `adapter.in.web`.
 - The page (`src/main/resources/static/index.html`, plain JavaScript) opens the stream, loads `/stats`, ignores every event whose id is not greater than the snapshot's `seq` (so nothing is counted twice) and reloads the snapshot when the stream reconnects. Reloading the page does not reset the counts.
@@ -335,6 +335,9 @@ SELECT quote_id, text FROM classified_quotes WHERE emotion = 'unknown';
 - Neon may be asleep: the first write after a pause can take a few seconds, and a failed write is retried every 2 s.
 - The live feed keeps all results in memory and rebuilds them from the start of `emotions` on every start; fine for one book, not for millions of messages.
 - Everything shares one Docker VM of about 3.9 GB (Kafka, Ollama, the app).
+- A message that is valid JSON but has null fields (only possible if something else writes to `emotions`) would be retried forever by the writer and break `/stats`; the app itself never produces one.
+- A 4xx from Ollama (for example the model is not downloaded, 404) is stored as `unknown` and the first stored row wins, so start the stack with `ollama-init` finished.
+- The live feed sends events to the browsers from the Kafka consumer thread under a lock: one stalled browser can delay the feed.
 
 ## Design Decisions
 
